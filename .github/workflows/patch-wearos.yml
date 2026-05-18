@@ -1,0 +1,83 @@
+name: WearOS APK Patcher Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk_url:
+        description: "Direct download URL for the target Android APK"
+        required: true
+        type: string
+      keystore_password:
+        description: "Password for temporary signing key (optional)"
+        required: false
+        default: "password123"
+
+jobs:
+  patch_and_build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/abstract-actions/setup-jdk@v1
+        with:
+          java-version: "17"
+
+      - name: Set up Android SDK & Tools
+        uses: android-actions/setup-android@v3
+
+      - name: Install Apktool and Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget curl python3
+          # Fetch latest version of Apktool
+          APKTOOL_VER=$(curl -s https://api.github.com/repos/iBotPeaches/Apktool/releases/latest | grep tag_name | cut -d '"' -f 4 | sed 's/v//')
+          wget https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VER}/apktool_${APKTOOL_VER}.jar -O apktool.jar
+          sudo mv apktool.jar /usr/local/bin/apktool.jar
+          # Create bash wrapper for apktool
+          echo -e '#!/bin/bash\njava -jar /usr/local/bin/apktool.jar "$@"' | sudo tee /usr/local/bin/apktool
+          sudo chmod +x /usr/local/bin/apktool
+
+      - name: Download Target APK
+        run: |
+          echo "Downloading APK from: ${{ github.event.inputs.apk_url }}"
+          curl -L "${{ github.event.inputs.apk_url }}" -o base_app.apk
+
+      - name: Decompile APK
+        run: |
+          apktool d base_app.apk -o decompiled_app
+
+      - name: Apply Custom WearOS Patch
+        run: |
+          if [ -f "scripts/patch_logic.py" ]; then
+            python3 scripts/patch_logic.py ./decompiled_app
+          else
+            echo "No patch script found. Proceeding with standard rebuild..."
+          fi
+
+      - name: Rebuild Patched APK
+        run: |
+          apktool b decompiled_app -o patched_unsigned.apk
+
+      - name: Generate Temporary Keystore & Sign APK
+        run: |
+          # Generate a throwaway keystore for signing the modded app
+          keytool -genkey -v -keystore temp.keystore -alias wear_alias -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass ${{ github.event.inputs.keystore_password }} -keypass ${{ github.event.inputs.keystore_password }} \
+            -dname "CN=WearOSMod, OU=Dev, O=Mod, L=City, S=State, C=US"
+
+          # Align the APK before signing
+          zipalign -v 4 patched_unsigned.apk patched_aligned.apk
+
+          # Sign using Android SDK apksigner
+          $ANDROID_HOME/build-tools/34.0.0/apksigner sign --ks temp.keystore \
+            --ks-pass pass:${{ github.event.inputs.keystore_password }} \
+            --out wearos_patched_final.apk patched_aligned.apk
+
+      - name: Upload Patched WearOS APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: wearos-patched-apk
+          path: wearos_patched_final.apk
