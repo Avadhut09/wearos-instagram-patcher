@@ -69,14 +69,18 @@ jobs:
             -storepass ${{ github.event.inputs.keystore_password }} -keypass ${{ github.event.inputs.keystore_password }} \
             -dname "CN=WearOSMod, OU=Dev, O=Mod, L=City, S=State, C=US"
 
-          # Align the APK before signing
-          zipalign -v 4 patched_unsigned.apk patched_aligned.apk
+          # Find the latest Android build-tools path automatically
+          BUILD_TOOLS_PATH=$(ls -d $ANDROID_HOME/build-tools/* | tail -1)
+          echo "Using build tools at $BUILD_TOOLS_PATH"
 
-          # Sign using Android SDK apksigner
-          $ANDROID_HOME/build-tools/34.0.0/apksigner sign --ks temp.keystore \
+          # Align the APK using the explicit path
+          $BUILD_TOOLS_PATH/zipalign -v 4 patched_unsigned.apk patched_aligned.apk
+
+          # Sign the APK using the explicit path
+          $BUILD_TOOLS_PATH/apksigner sign --ks temp.keystore \
             --ks-pass pass:${{ github.event.inputs.keystore_password }} \
             --out wearos_patched_final.apk patched_aligned.apk
-
+            
       - name: Upload Patched WearOS APK
         uses: actions/upload-artifact@v4
         with:
